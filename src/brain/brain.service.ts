@@ -36,39 +36,57 @@ export class BrainService {
   }
 
   async analyzeAndFormat(
-    rawText: string,
-    currentMemory: string,
-  ): Promise<string | null> {
-    this.logger.log('🧠 Consolidando informação no arquivo...');
+    text: string,
+    currentContent: string,
+  ): Promise<string> {
+    const dataAtual = new Date().toLocaleString('pt-BR');
+
+    const prompt = `Você é o Arquiteto do "Second Brain" (Zettelkasten) do usuário.
+    Sua tarefa é atualizar a documentação com a nova anotação de voz.
+
+    PASSO 1: CLASSIFICAÇÃO
+    Analise o contexto do arquivo e da anotação. É um projeto técnico/software, ou é algo pessoal/geral (viagens, ideias, rotina, estudos)?
+
+    PASSO 2: FORMATAÇÃO OBRIGATÓRIA (Escolha o layout adequado)
+    
+    SE FOR TÉCNICO (Projetos, Código, Arquitetura):
+    Use EXATAMENTE as seções:
+    "📌 Estado Atual" (A verdade de hoje).
+    "🏛️ Arquitetura e Decisões" (Detalhes técnicos).
+    "⏳ Histórico de Evolução" (Log imutável com data/hora).
+    "🏷️ Tags"
+
+    SE FOR PESSOAL (Viagens, Vida, Ideias, Rotina):
+    Use EXATAMENTE as seções:
+    "📝 Resumo Geral" (O status atual do plano ou ideia).
+    "🎯 Detalhes e Planejamento" (Informações cruciais, custos, roteiros, etc).
+    "⏳ Diário de Bordo" (Log imutável dos pensamentos com data/hora).
+    "🏷️ Tags"
+
+    DIRETRIZES GERAIS PARA AMBOS:
+    1. O "Histórico" (ou Diário) NUNCA deve ter itens apagados. Adicione a nova anotação no final usando a data e hora: ${dataAtual}.
+    2. Reescreva a parte superior (Estado Atual/Resumo) para refletir a última anotação, caso as coisas mudem de direção.
+    3. Retorne APENAS o código Markdown atualizado. Comece direto com o título #. Sem blocos \`\`\` em volta.
+
+    CONTEÚDO ATUAL:
+    """
+    ${currentContent || 'Arquivo vazio ou recém-criado.'}
+    """
+
+    NOVA ANOTAÇÃO DE VOZ:
+    "${text}"`;
 
     try {
       const response = await this.openai.chat.completions.create({
+        messages: [{ role: 'system', content: prompt }],
         model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `Você é o organizador de anotações do Warement Brain.
-            
-            Conteúdo Atual do Arquivo:
-            """
-            ${currentMemory ? currentMemory : 'Arquivo vazio. Crie a estrutura inicial.'}
-            """
-            
-            Sua tarefa é adicionar a NOVA INFORMAÇÃO de forma coesa dentro do Conteúdo Atual.
-            - Se o assunto já existir, adicione os novos detalhes sem repetir o que já está escrito.
-            - Se for um tópico diferente dentro do mesmo projeto, crie um novo subtítulo.
-            - Mantenha ou crie Tags úteis (ex: #backend, #malta).
-            - RETORNE APENAS O TEXTO MARKDOWN COMPLETO E ATUALIZADO. Sem blocos (\`\`\`) e sem explicações.`,
-          },
-          { role: 'user', content: `NOVA INFORMAÇÃO: "${rawText}"` },
-        ],
-        temperature: 0.2,
+        temperature: 0.1,
       });
 
-      return response.choices[0].message.content?.trim() ?? null;
+      return response.choices[0]?.message?.content?.trim() || '';
     } catch (error) {
-      this.logger.error('Erro ao formatar:', error);
-      return null;
+      this.logger.error('Erro ao formatar o conteúdo:', error);
+      return '';
     }
   }
 
@@ -84,17 +102,17 @@ export class BrainService {
         messages: [
           {
             role: 'system',
-            content: `Você é um roteador inteligente de arquivos para um Segundo Cérebro (Zettelkasten).
-            Sua função é decidir a gaveta (arquivo) exata para salvar a nova anotação.
+            content: `Você é o cérebro de roteamento de um assistente de voz.
             
             Arquivos existentes: [${existingFiles.length > 0 ? existingFiles.join(', ') : 'Nenhum'}]
             
             Regras Rigorosas:
-            1. LIXO: Se o texto for ruído, música ou conversa inútil, retorne APENAS: DESCARTAR.
-            2. ARQUIVO EXISTENTE: SÓ retorne o nome de um arquivo existente se o DOMÍNIO ESPECÍFICO for idêntico. Se a tecnologia for a mesma (ex: Backend), mas o contexto do negócio for diferente (ex: Pagamentos vs Produtos), você DEVE criar um arquivo novo.
-            3. NOVO ARQUIVO: Para domínios diferentes, crie um novo nome de arquivo em PascalCase terminando em .md.
-            4. NOMENCLATURA: NUNCA crie nomes genéricos (como "Backend.md", "Projeto.md" ou "Gerenciamento.md"). Seja ultradescritivo com o domínio de negócio (Ex: "BackendPagamentos.md", "GerenciamentoProdutos.md").
-            5. Retorne APENAS o nome do arquivo. Sem aspas, sem explicações.`,
+            1. LIXO: Se for ruído, música ou conversa inútil, retorne: DESCARTAR.
+            2. ARQUIVO EXISTENTE: Se for uma nova anotação sobre um domínio já existente, retorne o nome do arquivo.
+            3. NOVO ARQUIVO: Para novos domínios, crie um nome em PascalCase terminando em .md.
+            4. NOMENCLATURA: Nunca use nomes genéricos (ex: Projeto.md). Seja específico (ex: BackendPagamentos.md).
+            5. PERGUNTA: Se o usuário estiver FAZENDO UMA PERGUNTA, pedindo para lembrar de algo, ou buscando uma informação, retorne APENAS a palavra: PERGUNTA.
+            6. Retorne APENAS o nome do arquivo, DESCARTAR ou PERGUNTA. Sem aspas ou explicações.`,
           },
           { role: 'user', content: rawText },
         ],
@@ -113,5 +131,30 @@ export class BrainService {
       this.logger.error('Erro no roteamento:', error);
       return null;
     }
+  }
+
+  async answerQuestion(question: string, context: string): Promise<string> {
+    const response = await this.openai.chat.completions.create({
+      messages: [
+        {
+          role: 'system',
+          content: `Você é um assistente pessoal inteligente. O usuário te fez uma pergunta por voz.
+          Você deve responder baseando-se ÚNICA E EXCLUSIVAMENTE no contexto de memória fornecido abaixo.
+          Se a resposta não estiver no contexto, diga que não se lembra ou não encontrou a informação nas anotações.
+          Seja direto, natural e fale como se estivesse conversando em voz alta com o usuário.
+          
+          CONTEXTO RECUPERADO DA MEMÓRIA:
+          ${context || 'Nenhuma memória encontrada sobre este assunto.'}`,
+        },
+        { role: 'user', content: question },
+      ],
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.3,
+    });
+
+    return (
+      response.choices[0]?.message?.content?.trim() ||
+      'Desculpe, me perdi no pensamento.'
+    );
   }
 }

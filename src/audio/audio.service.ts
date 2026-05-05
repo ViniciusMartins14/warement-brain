@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BrainService } from '../brain/brain.service';
 import { spawn, ChildProcess } from 'child_process';
 import { MemoryService } from 'src/memory/memory.service';
+import { VectorService } from 'src/vector/vector.service';
 
 @Injectable()
 export class AudioService {
@@ -17,6 +18,7 @@ export class AudioService {
   constructor(
     private readonly brainService: BrainService,
     private readonly memoryService: MemoryService,
+    private readonly vectorService: VectorService,
   ) {}
 
   startBrainHearing() {
@@ -62,27 +64,56 @@ export class AudioService {
           if (text && text.trim().length > 2) {
             const existingFiles = this.memoryService.getVaultFiles();
 
-            const targetFile = await this.brainService.routeToTopic(
+            // 1. Roteia a Intenção
+            const intent = await this.brainService.routeToTopic(
               text.trim(),
               existingFiles,
             );
 
-            if (!targetFile) {
+            const safeIntent = intent?.toUpperCase();
+
+            if (safeIntent === 'DESCARTAR') {
               this.logger.log(`Áudio descartado: "${text.trim()}"`);
-            } else {
-              this.logger.log(`Roteado para o arquivo: ${targetFile}`);
+              return;
+            }
 
-              const currentContent =
-                this.memoryService.getFileContent(targetFile);
-
-              const finalContent = await this.brainService.analyzeAndFormat(
-                text.trim(),
-                currentContent,
+            if (safeIntent?.includes('PERGUNTA')) {
+              this.logger.log(
+                'Pergunta detectada! Vasculhando a memória (ChromaDB)...',
               );
 
-              if (finalContent) {
-                this.memoryService.saveToFile(targetFile, finalContent);
-              }
+              const context = await this.vectorService.searchContext(
+                text.trim(),
+              );
+
+              const resposta = await this.brainService.answerQuestion(
+                text.trim(),
+                context,
+              );
+
+              this.logger.log(`\n BRAIN: ${resposta}\n`);
+              return;
+            }
+
+            this.logger.log(`Intenção de Escrita: Roteado para [${intent}]`);
+            const targetFile = intent?.endsWith('.md')
+              ? intent
+              : `${intent}.md`;
+
+            const currentContent =
+              this.memoryService.getFileContent(targetFile);
+
+            this.logger.log('Consolidando informação no arquivo...');
+
+            const finalContent = await this.brainService.analyzeAndFormat(
+              text.trim(),
+              currentContent,
+            );
+
+            if (finalContent) {
+              this.memoryService.saveToFile(targetFile, finalContent);
+
+              await this.vectorService.saveDocument(targetFile, finalContent);
             }
           }
         } catch (error) {
@@ -113,7 +144,7 @@ export class AudioService {
 
   startListening(durationInSeconds = 5) {
     this.logger.log(
-      `🎙️ Warement Brain ativando escuta por ${durationInSeconds}s (Modo Nativo Windows)...`,
+      `Warement Brain ativando escuta por ${durationInSeconds}s (Modo Nativo Windows)...`,
     );
 
     const soxProcess = spawn('sox', [
