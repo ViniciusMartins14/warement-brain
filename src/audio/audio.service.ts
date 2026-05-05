@@ -3,6 +3,10 @@ import { BrainService } from '../brain/brain.service';
 import { spawn, ChildProcess } from 'child_process';
 import { MemoryService } from 'src/memory/memory.service';
 import { VectorService } from 'src/vector/vector.service';
+import * as fs from 'fs';
+import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
+import * as path from 'path';
+import { exec } from 'child_process';
 
 @Injectable()
 export class AudioService {
@@ -92,6 +96,8 @@ export class AudioService {
               );
 
               this.logger.log(`\n BRAIN: ${resposta}\n`);
+
+              await this.speak(resposta);
               return;
             }
 
@@ -172,5 +178,47 @@ export class AudioService {
         this.brainService.transcribe(this.tempAudioPath);
       }, 500);
     }, durationInSeconds * 1000);
+  }
+
+  private async speak(text: string) {
+    this.logger.log('🗣️ Gerando voz neural (Edge-TTS - Antonio)...');
+
+    try {
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(
+        'pt-BR-AntonioNeural',
+        OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
+      );
+
+      const audioPath = path.resolve(process.cwd(), 'jarvis_response.mp3');
+
+      const streamData = tts.toStream(text);
+      const readableStream = streamData.audioStream;
+      const writeStream = fs.createWriteStream(audioPath);
+
+      await new Promise<void>((resolve, reject) => {
+        readableStream.pipe(writeStream);
+        writeStream.on('finish', resolve);
+        readableStream.on('error', reject);
+        writeStream.on('error', reject);
+      });
+
+      this.logger.log('🔊 Reproduzindo resposta...');
+
+      const psCommand = `powershell -c "Add-Type -AssemblyName PresentationCore; $p = New-Object System.Windows.Media.MediaPlayer; $p.Open('${audioPath}'); $p.Play(); Start-Sleep -s 2; while($p.Position -lt $p.NaturalDuration.TimeSpan) { Start-Sleep -m 100 }"`;
+
+      await new Promise<void>((resolve) => {
+        exec(psCommand, (error) => {
+          if (error) this.logger.error('Erro no Playback PowerShell:', error);
+          resolve();
+        });
+      });
+
+      this.logger.log('Reprodução finalizada.');
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Erro no TTS: ${errorMessage}`);
+    }
   }
 }
